@@ -1,7 +1,7 @@
 {
   "name": "FIAP Tools",
   "description": "Utilitarios para facilitar a vida na FIAP",
-  "version": "1.3",
+  "version": "1.4",
   "manifest_version": 3,
   "background": {
     "service_worker": "background.js"

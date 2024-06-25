@@ -1,4 +1,98 @@
 console.log("FIAP Tools iniciado!");
+
+// verifica versionamento para ver se tem atualização
+fetch("https://fiap.webart3.com/config/getversion").then((response) => {
+  response.json().then((data) => {
+
+    // manifest version
+    var manifestData = chrome.runtime.getManifest();
+    var manifestVersion = manifestData.version;
+
+    if (data.version != manifestVersion) {
+
+      // alert("Atualização disponível para o FIAP Tools! Versão atual: " + manifestVersion + " Versão disponível: " + data.version);
+
+      let style = document.createElement('style');
+      style.innerHTML = `
+        .popup {
+          position: fixed;
+          top: 20px;
+          right: 20px;
+          width: 300px;
+          background-color: #2e2e2e;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+          border-radius: 8px;
+          overflow: hidden;
+          z-index: 1011;
+        }
+
+        .popup-header {
+          background-color: #ed145b;
+          color: #fff;
+          padding: 10px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+
+        .popup-title {
+          font-size: 16px;
+        }
+
+        .popup-close {
+          cursor: pointer;
+          font-size: 20px;
+          line-height: 20px;
+        }
+
+        .popup-body {
+          padding: 15px;
+          text-align: center;
+        }
+
+        .popup-button {
+          background-color: #ed145b;
+          color: #fff;
+          border: none;
+          padding: 10px 15px;
+          margin: 5px;
+          cursor: pointer;
+          border-radius: 5px;
+          transition: background-color 0.3s;
+        }
+
+        .popup-button:hover {
+          transition: 0.5s;
+          background-color: #2e2e2e;
+          color: #ed145b;
+        }
+      `;
+
+      document.head.appendChild(style);
+
+      let div = document.createElement('div');
+      div.innerHTML = `
+          <div class="popup-header">
+              <span class="popup-title">Atualização disponível para o FIAP Tools!</span>
+              <span class="popup-close" id="popup-close">&times;</span>
+          </div>
+          <div class="popup-body">
+              <button class="popup-button" onclick="window.open('${data.download}', '_blank')">Atualizar agora</button>
+              <button class="popup-button" onclick="window.open('${data.project}', '_blank')">Ver projeto</button>
+          </div>`;
+      div.id = 'popup';
+      div.className = 'popup';
+      document.body.appendChild(div);
+
+      document.getElementById('popup-close').onclick = function() {
+        document.getElementById('popup').style.display = 'none';
+      }
+
+    }
+
+  });
+});
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -88,7 +182,9 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
   var id = location.search?.split("id=")?.[1]?.split("&")?.[0];
   var sesskey = location.search?.split("sesskey=")?.[1]?.split("&")?.[0];
   if (id && sesskey) {
+
     const fetchFastTestAnswers = async (shouldCreateProgressBar = true) => {
+
       let wrapper, progressBar;
 
       if (shouldCreateProgressBar) {
@@ -239,7 +335,9 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
           }
         
         });
+
     };
+
     fetchFastTestAnswers();
   }
 }

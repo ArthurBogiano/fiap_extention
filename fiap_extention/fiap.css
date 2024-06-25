@@ -24,6 +24,7 @@ li:hover {
   color: white;
   cursor: pointer;
 }
+
 .wrapper-progress-bar {
   margin-top: 0.25rem;
   margin-bottom: 0.25rem;
@@ -84,6 +85,7 @@ li:hover {
   outline: none;
   box-shadow: 0 0 0 2px #93c5fd, 0 0 0 3px rgba(66, 153, 225, 0.5);
 }
+
 .showIndicators-label {
   margin-left: 0.5rem;
   font-size: 0.875rem;
