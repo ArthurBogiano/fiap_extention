@@ -88,8 +88,15 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
   var id = location.search?.split("id=")?.[1]?.split("&")?.[0];
   var sesskey = location.search?.split("sesskey=")?.[1]?.split("&")?.[0];
   if (id && sesskey) {
-    const fetchFastTestAnswers = async () => {
-      const { wrapper, progressBar } = await createProgressBar();
+    const fetchFastTestAnswers = async (shouldCreateProgressBar = true) => {
+      let wrapper, progressBar;
+
+      if (shouldCreateProgressBar) {
+        const progressBarData = await createProgressBar();
+        wrapper = progressBarData.wrapper;
+        progressBar = progressBarData.progressBar;
+      }
+
       await delay(5000);
       await fetch(
         `https://on.fiap.com.br/lib/ajax/service.php?sesskey=${sesskey}`,
@@ -192,13 +199,45 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
                         });
                       }
                     }
-                  });
-              }
-              const progress = ((index + 1) / totalItems) * 100;
+                  }
+                });
+            }
+            const progress = ((index + 1) / totalItems) * 100;
+            if (progressBar) {
               updateProgressBar(progressBar, Math.round(progress));
-            })
-          );
-          wrapper.remove();
+            }
+          }
+          wrapper?.remove();
+
+          const setFunctionOnFinishButton = (dom_target) => {
+            if (!dom_target) {
+              return;
+            }
+
+            const finishButton = dom_target.querySelector(
+              "button.on-button-finish-fast-test"
+            );
+
+            if (
+              finishButton &&
+              !finishButton.hasAttribute("data-event-listener")
+            ) {
+              finishButton.setAttribute("data-event-listener", "true");
+              finishButton.addEventListener("click", () => {
+                fetchFastTestAnswers(false);
+              });
+            }
+          };
+
+          setFunctionOnFinishButton(document);
+
+          let iframes = document.querySelectorAll("iframe");
+          if (iframes.length > 0) {
+            Array.from(iframes).map((iframe) => {
+              setFunctionOnFinishButton(iframe.contentDocument);
+            });
+          }
+        
         });
     };
     fetchFastTestAnswers();
