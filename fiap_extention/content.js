@@ -199,14 +199,14 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
                         });
                       }
                     }
-                  }
                 });
             }
             const progress = ((index + 1) / totalItems) * 100;
             if (progressBar) {
               updateProgressBar(progressBar, Math.round(progress));
             }
-          }
+          }))
+
           wrapper?.remove();
 
           const setFunctionOnFinishButton = (dom_target) => {
