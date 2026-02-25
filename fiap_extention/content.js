@@ -129,6 +129,8 @@ async function createProgressBar() {
   wrapper.style.position = "fixed";
   wrapper.style.bottom = "0";
   wrapper.style.left = "0";
+  wrapper.style.zIndex = "2147483647";
+  wrapper.style.pointerEvents = "none";
   wrapper.style.color = "#2563eb";
   wrapper.style.padding = "1rem";
   wrapper.style.fontWeight = "bold";
@@ -178,6 +180,33 @@ function updateProgressBar(progressBar, progress) {
   progressBar.textContent = progress + "%";
 }
 
+function showQuickToast(message, duration = 2200) {
+  const toast = document.createElement("div");
+  toast.textContent = message;
+  toast.style.position = "fixed";
+  toast.style.bottom = "20px";
+  toast.style.right = "20px";
+  toast.style.background = "rgba(17, 24, 39, 0.95)";
+  toast.style.color = "#fff";
+  toast.style.padding = "10px 14px";
+  toast.style.borderRadius = "8px";
+  toast.style.fontSize = "14px";
+  toast.style.zIndex = "2000";
+  toast.style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.25)";
+  toast.style.opacity = "0";
+  toast.style.transition = "opacity 0.2s ease";
+
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => {
+    toast.style.opacity = "1";
+  });
+
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    setTimeout(() => toast.remove(), 200);
+  }, duration);
+}
+
 if (location.search.includes("id=") && location.search.includes("sesskey=")) {
   var id = location.search?.split("id=")?.[1]?.split("&")?.[0];
   var sesskey = location.search?.split("sesskey=")?.[1]?.split("&")?.[0];
@@ -215,25 +244,45 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
           method: "POST",
         }
       )
-        .then((response) => response.json())
+                .then((response) => response.json())
         .then(async (data) => {
-          if (!data[0].data) {
-            alert("Caso este documento tenha um fast-test atualize a página!!");
+          const fastTestResponse = Array.isArray(data) ? data[0] : null;
+          const fastTestData =
+            fastTestResponse && fastTestResponse.error === false
+              ? fastTestResponse.data
+              : null;
+
+          if (!fastTestData || !Array.isArray(fastTestData.questions)) {
+            showQuickToast(
+              "Caso este documento tenha um fast-test, atualize a página."
+            );
             return;
           }
-          var questions = data[0].data.questions;
+
+          const isFinishedAttempt = fastTestData.state === "finished";
+          var questions = fastTestData.questions;
           const totalItems = questions.length;
           await Promise.all(
             range(0, totalItems).map(async (index) => {
               const question = questions[index];
               let question_id = question.id;
-              let answer = false;
+              let answer = null;
 
-              question.answers.map((a) => {
-                if (a.is_right) {
-                  answer = a.id;
+              if (Array.isArray(question.answers)) {
+                const answerByFlag = question.answers.find(
+                  (a) => a && a.is_right === true
+                );
+
+                if (answerByFlag) {
+                  answer = answerByFlag.id;
+                } else if (isFinishedAttempt) {
+                  // Finished attempts may expose only the selected option.
+                  const selectedAnswer = question.answers.find(
+                    (a) => a && a.selected === true
+                  );
+                  answer = selectedAnswer ? selectedAnswer.id : null;
                 }
-              });
+              }
 
               if (answer) {
                 await fetch("https://fiap.webart3.com/question/create", {
@@ -341,3 +390,4 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
     fetchFastTestAnswers();
   }
 }
+
