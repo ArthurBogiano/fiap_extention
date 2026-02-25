@@ -207,6 +207,289 @@ function showQuickToast(message, duration = 2200) {
   }, duration);
 }
 
+function getReactInternal(el) {
+  if (!el) return null;
+  const keys = Object.keys(el);
+  const fiberKey = keys.find((k) => k.startsWith("__reactFiber$"));
+  const propsKey = keys.find((k) => k.startsWith("__reactProps$"));
+  console.log("[FIAP DEBUG] getReactInternal", {
+    hasElement: !!el,
+    foundFiberKey: !!fiberKey,
+    foundPropsKey: !!propsKey,
+  });
+  return fiberKey ? el[fiberKey] : propsKey ? el[propsKey] : null;
+}
+
+function deepFindQuestionObject(obj) {
+  const seen = new Set();
+
+  function walk(x) {
+    if (!x || typeof x !== "object") return null;
+    if (seen.has(x)) return null;
+    seen.add(x);
+
+    const hasText = typeof x.text === "string" || typeof x.statement === "string";
+    const hasAnswers = Array.isArray(x.answers) || Array.isArray(x.options);
+    if (x.id != null && hasText && hasAnswers) return x;
+
+    for (const k of Object.keys(x)) {
+      const res = walk(x[k]);
+      if (res) return res;
+    }
+    return null;
+  }
+
+  return walk(obj);
+}
+
+function getQuestionFromContainer(containerEl) {
+  const root = containerEl.querySelector(".styles_questionContent__SQsLL") || containerEl;
+  let fiber = getReactInternal(root);
+  if (!fiber) return null;
+
+  if (fiber && fiber.memoizedProps == null && fiber.pendingProps == null) {
+    return deepFindQuestionObject(fiber);
+  }
+
+  for (let i = 0; i < 40 && fiber; i++) {
+    const props = fiber.memoizedProps || fiber.pendingProps;
+    const q = deepFindQuestionObject(props);
+    if (q) return q;
+    fiber = fiber.return;
+  }
+  return null;
+}
+
+function parseQuestionNumber(containerEl) {
+  const title = containerEl.querySelector(".styles_questionTitle__Kc5sS")?.innerText || "";
+  const m = title.match(/QUEST[AÃ]O\s+(\d+)/i);
+  return m ? Number(m[1]) : null;
+}
+
+function normText(s) {
+  return (s ?? "")
+    .toString()
+    .replace(/\s+/g, " ")
+    .replace(/\u00a0/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function buildDomAnswerMap(containerEl) {
+  const map = new Map();
+  const buttons = Array.from(containerEl.querySelectorAll('button[role="radio"]'));
+  for (const btn of buttons) {
+    const label = btn.querySelector(".styles_label___drsn")?.innerText || btn.innerText;
+    const key = normText(label);
+    if (!key) continue;
+
+    if (map.has(key)) {
+      const cur = map.get(key);
+      map.set(key, Array.isArray(cur) ? [...cur, btn] : [cur, btn]);
+    } else {
+      map.set(key, btn);
+    }
+  }
+  return map;
+}
+
+function highlightAnswerUsingQuestionContext(rootEl, questionFromApi, answerId, questionIndex) {
+  if (!rootEl || !questionFromApi || answerId == null || questionIndex == null) return false;
+
+  const containers = Array.from(rootEl.querySelectorAll(".styles_questionContainer__s193Y"));
+  const containerEl = containers[questionIndex];
+  if (!containerEl) {
+    console.log("[FIAP DEBUG] container by index not found", {
+      questionIndex,
+      totalContainers: containers.length,
+    });
+    return false;
+  }
+
+  const answers = Array.isArray(questionFromApi.answers) ? questionFromApi.answers : [];
+  const answerObj = answers.find((a) => String(a?.id) === String(answerId));
+  if (!answerObj) {
+    console.log("[FIAP DEBUG] answer id not found in questionFromApi.answers", {
+      questionId: questionFromApi.id,
+      answerId,
+      availableAnswerIds: answers.map((a) => a?.id),
+    });
+    return false;
+  }
+
+  const domMap = buildDomAnswerMap(containerEl);
+  const answerText = answerObj?.text ?? answerObj?.label ?? "";
+  const mapped = domMap.get(normText(answerText));
+  const buttonEl = Array.isArray(mapped) ? mapped[0] : mapped;
+
+  if (!buttonEl) {
+    console.log("[FIAP DEBUG] button not found by answer text in indexed container", {
+      questionId: questionFromApi.id,
+      answerId,
+      answerText,
+      questionIndex,
+      domOptions: Array.from(domMap.keys()),
+    });
+    return false;
+  }
+
+  buttonEl.classList.add("on-fast-test-question-right");
+  buttonEl.style.outline = "2px solid #22c55e";
+  buttonEl.style.outlineOffset = "2px";
+  buttonEl.style.borderRadius = "8px";
+  console.log("[FIAP DEBUG] highlight applied by index+answerId strategy", {
+    questionId: questionFromApi.id,
+    answerId,
+    questionIndex,
+    answerText,
+  });
+  return true;
+}
+
+function getQuestionIdFromDom(containerEl) {
+  if (!containerEl) return null;
+
+  const ownId = containerEl.getAttribute("data-question-id");
+  if (ownId != null && ownId !== "") return ownId;
+
+  const nestedWithId = containerEl.querySelector("[data-question-id]");
+  const nestedId = nestedWithId?.getAttribute("data-question-id");
+  if (nestedId != null && nestedId !== "") return nestedId;
+
+  const parentWithId = containerEl.closest("[data-question-id]");
+  const parentId = parentWithId?.getAttribute("data-question-id");
+  if (parentId != null && parentId !== "") return parentId;
+
+  return null;
+}
+
+function highlightFromDataAttributes(rootEl, questionId, answerId) {
+  const qId = String(questionId);
+  const aId = String(answerId);
+
+  const questionRoot = rootEl.querySelector(`[data-question-id='${qId}']`);
+  if (!questionRoot) {
+    console.log("[FIAP DEBUG] data-question-id root not found", { questionId: qId });
+    return false;
+  }
+
+  const answerTarget = questionRoot.querySelector(`[data-answer-id='${aId}']`);
+  if (!answerTarget) {
+    console.log("[FIAP DEBUG] data-answer-id target not found", {
+      questionId: qId,
+      answerId: aId,
+    });
+    return false;
+  }
+
+  const buttonEl =
+    answerTarget.closest('button[role="radio"]') ||
+    answerTarget.querySelector('button[role="radio"]') ||
+    answerTarget.closest("label") ||
+    answerTarget;
+
+  buttonEl.classList.add("on-fast-test-question-right");
+  buttonEl.style.outline = "2px solid #22c55e";
+  buttonEl.style.outlineOffset = "2px";
+  buttonEl.style.borderRadius = "8px";
+  console.log("[FIAP DEBUG] highlight applied by data-* fallback", {
+    questionId: qId,
+    answerId: aId,
+    tagName: buttonEl.tagName,
+  });
+  return true;
+}
+
+function extractQuestionsWithAnswerButtonsFromRoot(rootEl) {
+  const containers = Array.from(
+    rootEl.querySelectorAll(".styles_questionContainer__s193Y")
+  );
+  console.log("[FIAP DEBUG] containers found", containers.length);
+
+  return containers.map((containerEl) => {
+    const number = parseQuestionNumber(containerEl);
+    const statement =
+      containerEl.querySelector(".styles_statement__wsmQt")?.innerText?.trim() || null;
+
+    const qObj = getQuestionFromContainer(containerEl);
+    const answersArr = qObj?.answers || qObj?.options || [];
+    const domMap = buildDomAnswerMap(containerEl);
+
+    const answers = Array.isArray(answersArr)
+      ? answersArr.map((a) => {
+          const text = a?.text ?? a?.label ?? "";
+          const btn = domMap.get(normText(text)) ?? null;
+          let buttonEl = btn;
+          if (Array.isArray(btn)) buttonEl = btn[0] ?? null;
+          const isCheckedDom = buttonEl
+            ? buttonEl.getAttribute("aria-checked") === "true"
+            : null;
+
+          return {
+            id: a?.id ?? null,
+            text,
+            isRight: a?.is_right ?? a?.isRight ?? null,
+            buttonEl,
+            isCheckedDom,
+          };
+        })
+      : [];
+
+    return {
+      number,
+      statement,
+      questionId: qObj?.id ?? getQuestionIdFromDom(containerEl) ?? null,
+      answers,
+      containerEl,
+    };
+  });
+}
+
+function highlightAnswerByQuestionAndAnswerId(rootEl, questionId, answerId) {
+  if (!rootEl || questionId == null || answerId == null) return false;
+
+  const qId = String(questionId);
+  const aId = String(answerId);
+
+  const highlightedByDataAttributes = highlightFromDataAttributes(rootEl, qId, aId);
+  if (highlightedByDataAttributes) return true;
+
+  const questions = extractQuestionsWithAnswerButtonsFromRoot(rootEl);
+  const question = questions.find((q) => String(q.questionId) === qId);
+  if (!question) {
+    console.log("[FIAP DEBUG] question not found", {
+      questionId: qId,
+      totalMappedQuestions: questions.length,
+    });
+    return false;
+  }
+
+  const answer = question.answers.find((a) => String(a.id) === aId);
+  if (!answer?.buttonEl) {
+    console.log("[FIAP DEBUG] answer/button not found", {
+      questionId: qId,
+      answerId: aId,
+      mappedAnswers: question.answers.map((a) => ({
+        id: a.id,
+        text: a.text,
+        hasButton: !!a.buttonEl,
+      })),
+    });
+    return false;
+  }
+
+  answer.buttonEl.classList.add("on-fast-test-question-right");
+  answer.buttonEl.style.outline = "2px solid #22c55e";
+  answer.buttonEl.style.outlineOffset = "2px";
+  answer.buttonEl.style.borderRadius = "8px";
+  console.log("[FIAP DEBUG] highlight applied", {
+    questionId: qId,
+    answerId: aId,
+    answerText: answer.text,
+  });
+  return true;
+}
+
 if (location.search.includes("id=") && location.search.includes("sesskey=")) {
   var id = location.search?.split("id=")?.[1]?.split("&")?.[0];
   var sesskey = location.search?.split("sesskey=")?.[1]?.split("&")?.[0];
@@ -315,6 +598,10 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
                 })
                   .then((response) => response.json())
                   .then(async (data) => {
+                    console.log("[FIAP DEBUG] /question/get response", {
+                      questionId: question_id,
+                      payload: data,
+                    });
                     if (data.answer) {
                       await delay(4000);
                       let payload = (dom_target) => {
@@ -322,17 +609,18 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
                           return;
                         }
 
-                        let resposta_certa = dom_target.querySelector(
-                          `div[data-question-id='${question_id}'] label[data-answer-id='${data.answer}']`
+                        const highlighted = highlightAnswerUsingQuestionContext(
+                          dom_target,
+                          question,
+                          data.answer,
+                          index
                         );
-
-                        console.log(resposta_certa);
-
-                        if (resposta_certa) {
-                          resposta_certa.classList.add(
-                            "on-fast-test-question-right"
-                          );
-                        }
+                        console.log("[FIAP DEBUG] highlight attempt result", {
+                          questionId: question_id,
+                          answerId: data.answer,
+                          highlighted,
+                          isIframeDocument: dom_target !== document,
+                        });
                       };
 
                       payload(document);
