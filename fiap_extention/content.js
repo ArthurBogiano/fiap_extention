@@ -648,7 +648,7 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
             }
 
             const finishButton = dom_target.querySelector(
-              "button.on-button-finish-fast-test"
+              "button.style_finishButton__tGVPI"
             );
 
             if (
