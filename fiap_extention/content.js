@@ -266,9 +266,25 @@ function parseQuestionNumber(containerEl) {
   return m ? Number(m[1]) : null;
 }
 
+let htmlEntityDecoderEl = null;
+function decodeHtmlEntities(s) {
+  if (s == null) return "";
+  if (!htmlEntityDecoderEl) {
+    htmlEntityDecoderEl = document.createElement("textarea");
+  }
+  let current = String(s);
+  for (let i = 0; i < 5; i++) {
+    if (!/[&][a-zA-Z#0-9]+;/.test(current)) break;
+    htmlEntityDecoderEl.innerHTML = current;
+    const decoded = htmlEntityDecoderEl.value;
+    if (decoded === current) break;
+    current = decoded;
+  }
+  return current;
+}
+
 function normText(s) {
-  return (s ?? "")
-    .toString()
+  return decodeHtmlEntities(s)
     .replace(/\s+/g, " ")
     .replace(/\u00a0/g, " ")
     .trim()
@@ -327,6 +343,7 @@ function highlightAnswerUsingQuestionContext(rootEl, questionFromApi, answerId, 
       questionId: questionFromApi.id,
       answerId,
       answerText,
+      normalizedAnswerText: normText(answerText),
       questionIndex,
       domOptions: Array.from(domMap.keys()),
     });
@@ -678,4 +695,3 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
     fetchFastTestAnswers();
   }
 }
-
