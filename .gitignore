@@ -1,2 +1,3 @@
 *.zip
+!fiap_extention.zip
 zip_versions/

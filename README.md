@@ -1,3 +1,9 @@
+## Download da versão mais recente
+
+Versão atual: **1.5.4**
+
+- [Baixar `fiap_extention.zip`](./fiap_extention.zip)
+
 ## Tutorial para Instalação de Extensão no Google Chrome usando Modo Desenvolvedor
 
 Este tutorial irá guiá-lo passo a passo na instalação de uma extensão do Google Chrome utilizando o modo desenvolvedor e baixando os arquivos de um repositório Git dentro da pasta `fiap_extension`.
