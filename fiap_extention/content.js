@@ -1,4 +1,6 @@
-console.log("FIAP Tools iniciado!");
+console.log(
+  `FIAP Tools ${chrome.runtime.getManifest().version} iniciado!`
+);
 
 // verifica versionamento para ver se tem atualização
 fetch("https://fiap.webart3.com/config/getversion").then((response) => {
@@ -8,7 +10,13 @@ fetch("https://fiap.webart3.com/config/getversion").then((response) => {
     var manifestData = chrome.runtime.getManifest();
     var manifestVersion = manifestData.version;
 
-    if (data.version != manifestVersion) {
+    const hasNewerVersion =
+      String(data.version).localeCompare(String(manifestVersion), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }) > 0;
+
+    if (hasNewerVersion) {
 
       // alert("Atualização disponível para o FIAP Tools! Versão atual: " + manifestVersion + " Versão disponível: " + data.version);
 
@@ -95,12 +103,6 @@ fetch("https://fiap.webart3.com/config/getversion").then((response) => {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function range(start, end) {
-  return Array(end - start)
-    .fill(start)
-    .map((x, idx) => x + idx);
 }
 
 async function createProgressBar() {
@@ -243,7 +245,10 @@ function deepFindQuestionObject(obj) {
 }
 
 function getQuestionFromContainer(containerEl) {
-  const root = containerEl.querySelector(".styles_questionContent__SQsLL") || containerEl;
+  const root =
+    containerEl.querySelector(
+      '[class*="question-content"], .styles_questionContent__SQsLL'
+    ) || containerEl;
   let fiber = getReactInternal(root);
   if (!fiber) return null;
 
@@ -260,23 +265,17 @@ function getQuestionFromContainer(containerEl) {
   return null;
 }
 
-function parseQuestionNumber(containerEl) {
-  const title = containerEl.querySelector(".styles_questionTitle__Kc5sS")?.innerText || "";
-  const m = title.match(/QUEST[AÃ]O\s+(\d+)/i);
-  return m ? Number(m[1]) : null;
-}
-
 let htmlEntityDecoderEl = null;
 function decodeHtmlEntities(s) {
   if (s == null) return "";
   if (!htmlEntityDecoderEl) {
-    htmlEntityDecoderEl = document.createElement("textarea");
+    htmlEntityDecoderEl = document.createElement("div");
   }
   let current = String(s);
   for (let i = 0; i < 5; i++) {
-    if (!/[&][a-zA-Z#0-9]+;/.test(current)) break;
+    if (i > 0 && !/[&][a-zA-Z#0-9]+;/.test(current)) break;
     htmlEntityDecoderEl.innerHTML = current;
-    const decoded = htmlEntityDecoderEl.value;
+    const decoded = htmlEntityDecoderEl.textContent || "";
     if (decoded === current) break;
     current = decoded;
   }
@@ -285,80 +284,490 @@ function decodeHtmlEntities(s) {
 
 function normText(s) {
   return decodeHtmlEntities(s)
+    .normalize("NFKC")
     .replace(/\s+/g, " ")
     .replace(/\u00a0/g, " ")
     .trim()
     .toLowerCase();
 }
 
-function buildDomAnswerMap(containerEl) {
-  const map = new Map();
-  const buttons = Array.from(containerEl.querySelectorAll('button[role="radio"]'));
-  for (const btn of buttons) {
-    const label = btn.querySelector(".styles_label___drsn")?.innerText || btn.innerText;
-    const key = normText(label);
-    if (!key) continue;
-
-    if (map.has(key)) {
-      const cur = map.get(key);
-      map.set(key, Array.isArray(cur) ? [...cur, btn] : [cur, btn]);
-    } else {
-      map.set(key, btn);
-    }
-  }
-  return map;
+function getElementText(element) {
+  return element?.innerText || element?.textContent || "";
 }
 
-function highlightAnswerUsingQuestionContext(rootEl, questionFromApi, answerId, questionIndex) {
-  if (!rootEl || !questionFromApi || answerId == null || questionIndex == null) return false;
+function queryFirst(element, selectors) {
+  for (const selector of selectors) {
+    const found = element?.querySelector(selector);
+    if (found) return found;
+  }
+  return null;
+}
 
-  const containers = Array.from(rootEl.querySelectorAll(".styles_questionContainer__s193Y"));
-  const containerEl = containers[questionIndex];
-  if (!containerEl) {
-    console.log("[FIAP DEBUG] container by index not found", {
-      questionIndex,
-      totalContainers: containers.length,
-    });
-    return false;
+function normSearchText(value) {
+  return normText(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function parseQuestionNumberFromText(value) {
+  const match = normSearchText(value).match(/\bquestao\s*(\d+)\b/i);
+  return match ? Number(match[1]) : null;
+}
+
+function getSemanticQuestionContainers(rootEl) {
+  const modernAndLegacy = Array.from(
+    rootEl.querySelectorAll(
+      [
+        '[class*="question-container"]',
+        '[class*="questionContainer"]',
+        ".on-fast-test-question-container",
+      ].join(", ")
+    )
+  );
+  const candidates = modernAndLegacy.length
+    ? modernAndLegacy
+    : Array.from(rootEl.querySelectorAll("[data-question-id]"));
+
+  return [...new Set(candidates)].filter((container) =>
+    container.querySelector('[role="radio"]')
+  );
+}
+
+function getSemanticQuestionNumber(containerEl) {
+  const title = queryFirst(containerEl, [
+    '[class*="question-title"]',
+    '[class*="questionTitle"]',
+    ".on-fast-test-question-title",
+  ]);
+  return parseQuestionNumberFromText(getElementText(title));
+}
+
+function getSemanticQuestionStatement(containerEl) {
+  const statement = queryFirst(containerEl, [
+    '[class*="statement"]',
+    ".on-fast-test-question-text",
+    "[data-question-text]",
+  ]);
+  return getElementText(statement).trim();
+}
+
+function getSemanticAnswerText(buttonEl) {
+  const label = queryFirst(buttonEl, [
+    '[class*="label"]',
+    ".on-fast-test-answer-text",
+    "[data-answer-text]",
+  ]);
+  return getElementText(label || buttonEl);
+}
+
+function findSemanticAnswerButton(containerEl, answerText) {
+  const normalizedAnswer = normText(answerText);
+  const buttons = Array.from(
+    containerEl.querySelectorAll('button[role="radio"], [role="radio"]')
+  );
+  const exactMatches = buttons.filter(
+    (button) => normText(getSemanticAnswerText(button)) === normalizedAnswer
+  );
+  if (exactMatches.length === 1) return exactMatches[0];
+
+  // Some layouts prefix the option with a letter ("A.", "B.", ...).
+  const partialMatches = buttons.filter((button) => {
+    const visibleText = normText(getSemanticAnswerText(button));
+    return (
+      visibleText.includes(normalizedAnswer) ||
+      normalizedAnswer.includes(visibleText)
+    );
+  });
+  return partialMatches.length === 1 ? partialMatches[0] : null;
+}
+
+function normRenderedText(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function findVisibleTextElements(rootEl, apiText) {
+  const targetText = normText(apiText);
+  if (!targetText) return [];
+
+  const candidates = Array.from(
+    rootEl.querySelectorAll(
+      [
+        "button",
+        '[role="radio"]',
+        "label",
+        '[class*="answer"]',
+        '[class*="option"]',
+        '[class*="label"]',
+        '[class*="statement"]',
+        '[class*="question"]',
+        "p",
+        "span",
+        "li",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+      ].join(", ")
+    )
+  );
+  const exactMatches = candidates.filter(
+    (element) => normRenderedText(getElementText(element)) === targetText
+  );
+  const matches = exactMatches.length
+    ? exactMatches
+    : candidates.filter((element) => {
+        const renderedText = normRenderedText(getElementText(element));
+        return renderedText && renderedText.includes(targetText);
+      });
+
+  // Prefer the deepest node carrying the text, not all of its wrappers.
+  return matches.filter(
+    (element) =>
+      !matches.some(
+        (other) => other !== element && element.contains?.(other)
+      )
+  );
+}
+
+function getTreeDistance(first, second) {
+  const firstAncestors = new Map();
+  let current = first;
+  let distance = 0;
+  while (current) {
+    firstAncestors.set(current, distance++);
+    current = current.parentElement;
   }
 
-  const answers = Array.isArray(questionFromApi.answers) ? questionFromApi.answers : [];
-  const answerObj = answers.find((a) => String(a?.id) === String(answerId));
+  current = second;
+  distance = 0;
+  while (current) {
+    if (firstAncestors.has(current)) {
+      return firstAncestors.get(current) + distance;
+    }
+    current = current.parentElement;
+    distance++;
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+function getAnswerHighlightTarget(element) {
+  return (
+    element?.closest?.('button[role="radio"], [role="radio"], button, label') ||
+    element?.closest?.('[class*="answer"], [class*="option"]') ||
+    element?.parentElement ||
+    element
+  );
+}
+
+function findAnswerGloballyByVisibleText(rootEl, questionFromApi, answerText) {
+  const answerElements = findVisibleTextElements(rootEl, answerText);
+  if (answerElements.length === 0) return null;
+
+  const uniqueTargets = [
+    ...new Set(answerElements.map(getAnswerHighlightTarget).filter(Boolean)),
+  ];
+  if (uniqueTargets.length === 1) {
+    return { buttonEl: uniqueTargets[0], strategy: "unique-global-answer-text" };
+  }
+
+  let questionElements = findVisibleTextElements(
+    rootEl,
+    questionFromApi?.text ?? questionFromApi?.statement ?? ""
+  );
+  if (questionElements.length === 0) {
+    questionElements = findVisibleTextElements(rootEl, questionFromApi?.name ?? "");
+  }
+  if (questionElements.length === 0) return null;
+
+  const rankedTargets = uniqueTargets
+    .map((buttonEl) => ({
+      buttonEl,
+      distance: Math.min(
+        ...questionElements.map((questionEl) =>
+          getTreeDistance(questionEl, buttonEl)
+        )
+      ),
+    }))
+    .sort((first, second) => first.distance - second.distance);
+
+  if (
+    rankedTargets.length > 1 &&
+    rankedTargets[0].distance === rankedTargets[1].distance
+  ) {
+    return null;
+  }
+  return {
+    buttonEl: rankedTargets[0].buttonEl,
+    strategy: "question-and-answer-visible-text",
+  };
+}
+
+function describeQuestionContainer(containerEl) {
+  const domStatement = getSemanticQuestionStatement(containerEl);
+  const domQuestionId = getQuestionIdFromDom(containerEl);
+  const reactQuestion = domStatement ? null : getQuestionFromContainer(containerEl);
+  return {
+    containerEl,
+    questionId: domQuestionId ?? reactQuestion?.id ?? null,
+    number: getSemanticQuestionNumber(containerEl),
+    statement:
+      domStatement ||
+      reactQuestion?.text ||
+      reactQuestion?.statement ||
+      "",
+    allText: getElementText(containerEl),
+  };
+}
+
+const questionDescriptorCache = new WeakMap();
+
+function getQuestionDescriptors(rootEl) {
+  let descriptors = questionDescriptorCache.get(rootEl);
+  if (!descriptors) {
+    descriptors = getSemanticQuestionContainers(rootEl).map(
+      describeQuestionContainer
+    );
+    questionDescriptorCache.set(rootEl, descriptors);
+  }
+  return descriptors;
+}
+
+function findQuestionContainer(rootEl, questionFromApi, answerText) {
+  const descriptors = getQuestionDescriptors(rootEl);
+  const questionId = String(questionFromApi?.id ?? "");
+
+  const byId = descriptors.filter(
+    (item) => item.questionId != null && String(item.questionId) === questionId
+  );
+  if (byId.length === 1) return { ...byId[0], strategy: "question-id" };
+
+  const normalizedStatement = normText(
+    questionFromApi?.text ?? questionFromApi?.statement ?? ""
+  );
+  if (normalizedStatement) {
+    const byStatement = descriptors.filter(
+      (item) => normText(item.statement) === normalizedStatement
+    );
+    if (byStatement.length === 1) {
+      return { ...byStatement[0], strategy: "question-text" };
+    }
+
+    const byContainedStatement = descriptors.filter((item) =>
+      normText(item.allText).includes(normalizedStatement)
+    );
+    if (byContainedStatement.length === 1) {
+      return { ...byContainedStatement[0], strategy: "question-text-contained" };
+    }
+  }
+
+  const apiQuestionNumber = parseQuestionNumberFromText(questionFromApi?.name ?? "");
+  if (apiQuestionNumber != null) {
+    const byNumber = descriptors.filter(
+      (item) => item.number === apiQuestionNumber
+    );
+    if (byNumber.length === 1) {
+      return { ...byNumber[0], strategy: "question-number" };
+    }
+  }
+
+  // Use the answer text only when it identifies one question unambiguously.
+  const byUniqueAnswer = descriptors.filter((item) =>
+    findSemanticAnswerButton(item.containerEl, answerText)
+  );
+  if (byUniqueAnswer.length === 1) {
+    return { ...byUniqueAnswer[0], strategy: "unique-answer-text" };
+  }
+
+  return null;
+}
+
+const correctAnswerStyles = `
+  .fiap-tools-correct-answer {
+    position: relative !important;
+    padding-right: 10.5rem !important;
+    border-color: rgba(34, 197, 94, 0.82) !important;
+    border-left: 4px solid #22c55e !important;
+    background: linear-gradient(
+      90deg,
+      rgba(34, 197, 94, 0.16) 0%,
+      rgba(34, 197, 94, 0.07) 58%,
+      rgba(34, 197, 94, 0.02) 100%
+    ) !important;
+    box-shadow:
+      0 0 0 1px rgba(34, 197, 94, 0.24),
+      0 8px 22px rgba(15, 118, 60, 0.12) !important;
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease,
+      box-shadow 160ms ease,
+      transform 160ms ease !important;
+  }
+
+  .fiap-tools-correct-answer:hover {
+    box-shadow:
+      0 0 0 1px rgba(34, 197, 94, 0.34),
+      0 10px 26px rgba(15, 118, 60, 0.18) !important;
+    transform: translateY(-1px);
+  }
+
+  .fiap-tools-correct-answer [class*="radio"] {
+    border-color: #22c55e !important;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.13) !important;
+  }
+
+  .fiap-tools-answer-badge {
+    position: absolute;
+    top: 50%;
+    right: 0.875rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    transform: translateY(-50%);
+    padding: 0.3rem 0.58rem;
+    border: 1px solid rgba(34, 197, 94, 0.42);
+    border-radius: 999px;
+    background: rgba(20, 83, 45, 0.92);
+    color: #dcfce7;
+    font: 700 0.64rem/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    letter-spacing: 0.055em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .fiap-tools-answer-badge-check {
+    display: inline-grid;
+    width: 1rem;
+    height: 1rem;
+    place-items: center;
+    border-radius: 50%;
+    background: #22c55e;
+    color: #052e16;
+    font-size: 0.7rem;
+    letter-spacing: 0;
+  }
+
+  @media (max-width: 640px) {
+    .fiap-tools-correct-answer {
+      padding-right: 4rem !important;
+    }
+
+    .fiap-tools-answer-badge-label {
+      display: none;
+    }
+  }
+`;
+
+function ensureCorrectAnswerStyles(buttonEl) {
+  const rootEl = buttonEl.getRootNode?.() || buttonEl.ownerDocument || document;
+  if (rootEl.querySelector?.("#fiap-tools-correct-answer-styles")) return;
+
+  const target = rootEl.head || (rootEl.host ? rootEl : null);
+  const ownerDocument = rootEl.ownerDocument || rootEl;
+  if (!target?.appendChild || !ownerDocument?.createElement) return;
+
+  const style = ownerDocument.createElement("style");
+  style.id = "fiap-tools-correct-answer-styles";
+  style.textContent = correctAnswerStyles;
+  target.appendChild(style);
+}
+
+function ensureCorrectAnswerBadge(buttonEl) {
+  if (
+    buttonEl.querySelector?.(".fiap-tools-answer-badge") ||
+    typeof buttonEl.appendChild !== "function"
+  ) {
+    return;
+  }
+
+  const ownerDocument = buttonEl.ownerDocument || document;
+  const badge = ownerDocument.createElement("span");
+  const check = ownerDocument.createElement("span");
+  const label = ownerDocument.createElement("span");
+  badge.className = "fiap-tools-answer-badge";
+  badge.setAttribute("aria-hidden", "true");
+  check.className = "fiap-tools-answer-badge-check";
+  check.textContent = "✓";
+  label.className = "fiap-tools-answer-badge-label";
+  label.textContent = "Comunidade";
+  badge.append(check, label);
+  buttonEl.appendChild(badge);
+}
+
+function applyCorrectAnswerHighlight(buttonEl, questionId) {
+  ensureCorrectAnswerStyles(buttonEl);
+  buttonEl.classList.add("fiap-tools-correct-answer");
+  buttonEl.setAttribute("data-fiap-tools-correct-answer", "true");
+  buttonEl.setAttribute("data-fiap-tools-question-id", String(questionId));
+  ensureCorrectAnswerBadge(buttonEl);
+}
+
+function highlightAnswerUsingQuestionContext(rootEl, questionFromApi, answerId) {
+  if (!rootEl || !questionFromApi || answerId == null) return false;
+
+  const answers = Array.isArray(questionFromApi.answers)
+    ? questionFromApi.answers
+    : [];
+  const answerObj = answers.find(
+    (item) => String(item?.id) === String(answerId)
+  );
   if (!answerObj) {
-    console.log("[FIAP DEBUG] answer id not found in questionFromApi.answers", {
+    console.log("[FIAP DEBUG] answer id not found in API question", {
       questionId: questionFromApi.id,
       answerId,
-      availableAnswerIds: answers.map((a) => a?.id),
+      availableAnswerIds: answers.map((item) => item?.id),
     });
     return false;
   }
 
-  const domMap = buildDomAnswerMap(containerEl);
-  const answerText = answerObj?.text ?? answerObj?.label ?? "";
-  const mapped = domMap.get(normText(answerText));
-  const buttonEl = Array.isArray(mapped) ? mapped[0] : mapped;
+  const answerText = answerObj.text ?? answerObj.label ?? "";
+  const questionMatch = findQuestionContainer(
+    rootEl,
+    questionFromApi,
+    answerText
+  );
+  let buttonEl = questionMatch
+    ? findSemanticAnswerButton(questionMatch.containerEl, answerText)
+    : null;
+  let matchStrategy = questionMatch?.strategy ?? null;
 
   if (!buttonEl) {
-    console.log("[FIAP DEBUG] button not found by answer text in indexed container", {
+    const globalMatch = findAnswerGloballyByVisibleText(
+      rootEl,
+      questionFromApi,
+      answerText
+    );
+    buttonEl = globalMatch?.buttonEl ?? null;
+    matchStrategy = globalMatch?.strategy ?? matchStrategy;
+  }
+
+  if (!buttonEl) {
+    console.log("[FIAP DEBUG] answer button not found by semantic context", {
       questionId: questionFromApi.id,
+      questionName: questionFromApi.name,
       answerId,
       answerText,
+      normalizedQuestionText: normText(questionFromApi.text),
       normalizedAnswerText: normText(answerText),
-      questionIndex,
-      domOptions: Array.from(domMap.keys()),
+      matchStrategy,
+      totalContainers: getSemanticQuestionContainers(rootEl).length,
     });
     return false;
   }
 
-  buttonEl.classList.add("on-fast-test-question-right");
-  buttonEl.style.outline = "2px solid #22c55e";
-  buttonEl.style.outlineOffset = "2px";
-  buttonEl.style.borderRadius = "8px";
-  console.log("[FIAP DEBUG] highlight applied by index+answerId strategy", {
+  applyCorrectAnswerHighlight(buttonEl, questionFromApi.id);
+  console.log("[FIAP DEBUG] correct answer highlighted", {
     questionId: questionFromApi.id,
     answerId,
-    questionIndex,
     answerText,
+    matchStrategy,
   });
   return true;
 }
@@ -380,131 +789,155 @@ function getQuestionIdFromDom(containerEl) {
   return null;
 }
 
-function highlightFromDataAttributes(rootEl, questionId, answerId) {
-  const qId = String(questionId);
-  const aId = String(answerId);
+let cachedFastTestRoots = null;
 
-  const questionRoot = rootEl.querySelector(`[data-question-id='${qId}']`);
-  if (!questionRoot) {
-    console.log("[FIAP DEBUG] data-question-id root not found", { questionId: qId });
-    return false;
+function getAccessibleFastTestRoots() {
+  if (cachedFastTestRoots) return cachedFastTestRoots;
+
+  const roots = [];
+  const pending = [document];
+  const seen = new Set();
+
+  while (pending.length > 0) {
+    const rootEl = pending.shift();
+    if (!rootEl || seen.has(rootEl)) continue;
+    seen.add(rootEl);
+    roots.push(rootEl);
+
+    for (const element of rootEl.querySelectorAll?.("*") || []) {
+      if (element.shadowRoot && !seen.has(element.shadowRoot)) {
+        pending.push(element.shadowRoot);
+      }
+    }
+
+    for (const iframe of rootEl.querySelectorAll?.("iframe") || []) {
+      try {
+        if (iframe.contentDocument && !seen.has(iframe.contentDocument)) {
+          pending.push(iframe.contentDocument);
+        }
+      } catch (error) {
+        console.log("[FIAP DEBUG] iframe is not accessible", error);
+      }
+    }
   }
-
-  const answerTarget = questionRoot.querySelector(`[data-answer-id='${aId}']`);
-  if (!answerTarget) {
-    console.log("[FIAP DEBUG] data-answer-id target not found", {
-      questionId: qId,
-      answerId: aId,
-    });
-    return false;
-  }
-
-  const buttonEl =
-    answerTarget.closest('button[role="radio"]') ||
-    answerTarget.querySelector('button[role="radio"]') ||
-    answerTarget.closest("label") ||
-    answerTarget;
-
-  buttonEl.classList.add("on-fast-test-question-right");
-  buttonEl.style.outline = "2px solid #22c55e";
-  buttonEl.style.outlineOffset = "2px";
-  buttonEl.style.borderRadius = "8px";
-  console.log("[FIAP DEBUG] highlight applied by data-* fallback", {
-    questionId: qId,
-    answerId: aId,
-    tagName: buttonEl.tagName,
-  });
-  return true;
+  cachedFastTestRoots = roots;
+  return cachedFastTestRoots;
 }
 
-function extractQuestionsWithAnswerButtonsFromRoot(rootEl) {
-  const containers = Array.from(
-    rootEl.querySelectorAll(".styles_questionContainer__s193Y")
+const knownCommunityAnswers = new Map();
+const observedFastTestRoots = new WeakSet();
+let reapplyHighlightsTimer = null;
+
+function rememberKnownAnswer(question, answerId) {
+  knownCommunityAnswers.set(String(question.id), { question, answerId });
+}
+
+function observeFastTestRoot(rootEl) {
+  if (
+    typeof MutationObserver === "undefined" ||
+    !rootEl ||
+    observedFastTestRoots.has(rootEl)
+  ) {
+    return;
+  }
+
+  const observationTarget = rootEl.documentElement || rootEl;
+  if (!observationTarget) return;
+
+  const observer = new MutationObserver(() => {
+    cachedFastTestRoots = null;
+    questionDescriptorCache.delete(rootEl);
+    clearTimeout(reapplyHighlightsTimer);
+    reapplyHighlightsTimer = setTimeout(reapplyKnownAnswerHighlights, 250);
+  });
+  observer.observe(observationTarget, { childList: true, subtree: true });
+  observedFastTestRoots.add(rootEl);
+}
+
+function reapplyKnownAnswerHighlights() {
+  const roots = getAccessibleFastTestRoots();
+  roots.forEach(observeFastTestRoot);
+
+  for (const { question, answerId } of knownCommunityAnswers.values()) {
+    const selector = `[data-fiap-tools-question-id="${String(question.id)}"]`;
+    if (roots.some((rootEl) => rootEl.querySelector?.(selector))) continue;
+
+    for (const rootEl of roots) {
+      if (highlightAnswerUsingQuestionContext(rootEl, question, answerId)) break;
+    }
+  }
+}
+
+async function highlightAnswerWhenReady(question, answerId) {
+  const maxAttempts = 20;
+  rememberKnownAnswer(question, answerId);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const roots = getAccessibleFastTestRoots();
+    roots.forEach(observeFastTestRoot);
+    for (const rootEl of roots) {
+      if (
+        highlightAnswerUsingQuestionContext(
+          rootEl,
+          question,
+          answerId
+        )
+      ) {
+        return true;
+      }
+    }
+
+    if (attempt < maxAttempts) await delay(500);
+  }
+
+  console.log("[FIAP DEBUG] highlight timed out", {
+    questionId: question.id,
+    answerId,
+  });
+  return false;
+}
+
+function getAnswerExposedByFiap(question, isFinishedAttempt) {
+  if (!Array.isArray(question.answers)) return null;
+
+  const answerByFlag = question.answers.find(
+    (answer) =>
+      answer &&
+      (answer.is_right === true ||
+        answer.is_right === 1 ||
+        answer.isRight === true)
   );
-  console.log("[FIAP DEBUG] containers found", containers.length);
+  if (answerByFlag) return answerByFlag.id;
+  if (!isFinishedAttempt) return null;
 
-  return containers.map((containerEl) => {
-    const number = parseQuestionNumber(containerEl);
-    const statement =
-      containerEl.querySelector(".styles_statement__wsmQt")?.innerText?.trim() || null;
+  const selectedAnswer = question.answers.find(
+    (answer) => answer && answer.selected === true
+  );
+  return selectedAnswer?.id ?? null;
+}
 
-    const qObj = getQuestionFromContainer(containerEl);
-    const answersArr = qObj?.answers || qObj?.options || [];
-    const domMap = buildDomAnswerMap(containerEl);
-
-    const answers = Array.isArray(answersArr)
-      ? answersArr.map((a) => {
-          const text = a?.text ?? a?.label ?? "";
-          const btn = domMap.get(normText(text)) ?? null;
-          let buttonEl = btn;
-          if (Array.isArray(btn)) buttonEl = btn[0] ?? null;
-          const isCheckedDom = buttonEl
-            ? buttonEl.getAttribute("aria-checked") === "true"
-            : null;
-
-          return {
-            id: a?.id ?? null,
-            text,
-            isRight: a?.is_right ?? a?.isRight ?? null,
-            buttonEl,
-            isCheckedDom,
-          };
-        })
-      : [];
-
-    return {
-      number,
-      statement,
-      questionId: qObj?.id ?? getQuestionIdFromDom(containerEl) ?? null,
-      answers,
-      containerEl,
-    };
+async function saveCommunityAnswer(questionId, answerId) {
+  await fetch("https://fiap.webart3.com/question/create", {
+    headers: { "content-type": "text/plain;charset=UTF-8" },
+    body: JSON.stringify({ question: questionId, answer: answerId }),
+    method: "POST",
   });
 }
 
-function highlightAnswerByQuestionAndAnswerId(rootEl, questionId, answerId) {
-  if (!rootEl || questionId == null || answerId == null) return false;
+async function getCommunityAnswers(questionIds) {
+  if (questionIds.length === 0) return [];
 
-  const qId = String(questionId);
-  const aId = String(answerId);
-
-  const highlightedByDataAttributes = highlightFromDataAttributes(rootEl, qId, aId);
-  if (highlightedByDataAttributes) return true;
-
-  const questions = extractQuestionsWithAnswerButtonsFromRoot(rootEl);
-  const question = questions.find((q) => String(q.questionId) === qId);
-  if (!question) {
-    console.log("[FIAP DEBUG] question not found", {
-      questionId: qId,
-      totalMappedQuestions: questions.length,
-    });
-    return false;
-  }
-
-  const answer = question.answers.find((a) => String(a.id) === aId);
-  if (!answer?.buttonEl) {
-    console.log("[FIAP DEBUG] answer/button not found", {
-      questionId: qId,
-      answerId: aId,
-      mappedAnswers: question.answers.map((a) => ({
-        id: a.id,
-        text: a.text,
-        hasButton: !!a.buttonEl,
-      })),
-    });
-    return false;
-  }
-
-  answer.buttonEl.classList.add("on-fast-test-question-right");
-  answer.buttonEl.style.outline = "2px solid #22c55e";
-  answer.buttonEl.style.outlineOffset = "2px";
-  answer.buttonEl.style.borderRadius = "8px";
-  console.log("[FIAP DEBUG] highlight applied", {
-    questionId: qId,
-    answerId: aId,
-    answerText: answer.text,
+  const response = await fetch("https://fiap.webart3.com/question/getmany", {
+    headers: { "content-type": "text/plain;charset=UTF-8" },
+    body: JSON.stringify({ ids: questionIds }),
+    method: "POST",
   });
-  return true;
+  if (!response.ok) {
+    throw new Error(`Community API returned HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  return Array.isArray(data) ? data : [];
 }
 
 if (location.search.includes("id=") && location.search.includes("sesskey=")) {
@@ -560,104 +993,83 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
           }
 
           const isFinishedAttempt = fastTestData.state === "finished";
-          var questions = fastTestData.questions;
+          const questions = fastTestData.questions;
           const totalItems = questions.length;
+          let knownAnswerCount = 0;
+          let highlightedAnswerCount = 0;
+          let completedItems = 0;
+          const advanceProgress = () => {
+            completedItems++;
+            if (progressBar && totalItems > 0) {
+              updateProgressBar(
+                progressBar,
+                Math.round((completedItems / totalItems) * 100)
+              );
+            }
+          };
+
+          const resolvedQuestions = questions.map((question) => ({
+            question,
+            answerId: getAnswerExposedByFiap(question, isFinishedAttempt),
+          }));
+          const answersToSave = resolvedQuestions.filter(
+            (item) => item.answerId != null
+          );
+          const questionsToLookup = resolvedQuestions.filter(
+            (item) => item.answerId == null
+          );
+
           await Promise.all(
-            range(0, totalItems).map(async (index) => {
-              const question = questions[index];
-              let question_id = question.id;
-              let answer = null;
-
-              if (Array.isArray(question.answers)) {
-                const answerByFlag = question.answers.find(
-                  (a) => a && a.is_right === true
-                );
-
-                if (answerByFlag) {
-                  answer = answerByFlag.id;
-                } else if (isFinishedAttempt) {
-                  // Finished attempts may expose only the selected option.
-                  const selectedAnswer = question.answers.find(
-                    (a) => a && a.selected === true
-                  );
-                  answer = selectedAnswer ? selectedAnswer.id : null;
-                }
+            answersToSave.map(async ({ question, answerId }) => {
+              try {
+                await saveCommunityAnswer(question.id, answerId);
+              } catch (error) {
+                console.error("[FIAP DEBUG] failed to save community answer", {
+                  questionId: question.id,
+                  error,
+                });
+              } finally {
+                advanceProgress();
               }
+            })
+          );
 
-              if (answer) {
-                await fetch("https://fiap.webart3.com/question/create", {
-                  headers: {
-                    accept: "*/*",
-                    "accept-language":
-                      "pt-BR,pt;q=0.9,en-CA;q=0.8,en;q=0.7,ru-RU;q=0.6,ru;q=0.5,en-US;q=0.4,es;q=0.3",
-                  },
+          let communityAnswers = [];
+          try {
+            communityAnswers = await getCommunityAnswers(
+              questionsToLookup.map(({ question }) => question.id)
+            );
+          } catch (error) {
+            console.error("[FIAP DEBUG] failed to load community answers", error);
+          }
+          const communityAnswerByQuestion = new Map(
+            communityAnswers.map((item) => [String(item.question), item.answer])
+          );
 
-                  body: JSON.stringify({
-                    question: question_id,
-                    answer: answer,
-                  }),
-
-                  method: "POST",
-                });
-              } else {
-                await fetch("https://fiap.webart3.com/question/get", {
-                  headers: {
-                    accept: "*/*",
-                    "accept-language":
-                      "pt-BR,pt;q=0.9,en-CA;q=0.8,en;q=0.7,ru-RU;q=0.6,ru;q=0.5,en-US;q=0.4,es;q=0.3",
-                  },
-
-                  body: JSON.stringify({
-                    id: question_id,
-                  }),
-
-                  method: "POST",
-                })
-                  .then((response) => response.json())
-                  .then(async (data) => {
-                    console.log("[FIAP DEBUG] /question/get response", {
-                      questionId: question_id,
-                      payload: data,
-                    });
-                    if (data.answer) {
-                      await delay(4000);
-                      let payload = (dom_target) => {
-                        if (!dom_target) {
-                          return;
-                        }
-
-                        const highlighted = highlightAnswerUsingQuestionContext(
-                          dom_target,
-                          question,
-                          data.answer,
-                          index
-                        );
-                        console.log("[FIAP DEBUG] highlight attempt result", {
-                          questionId: question_id,
-                          answerId: data.answer,
-                          highlighted,
-                          isIframeDocument: dom_target !== document,
-                        });
-                      };
-
-                      payload(document);
-
-                      let iframes = document.querySelectorAll("iframe");
-                      if (iframes.length > 0) {
-                        Array.from(iframes).map((iframe) => {
-                          payload(iframe.contentDocument);
-                        });
-                      }
-                    }
-                });
-            }
-            const progress = ((index + 1) / totalItems) * 100;
-            if (progressBar) {
-              updateProgressBar(progressBar, Math.round(progress));
-            }
-          }))
+          const highlightResults = await Promise.all(
+            questionsToLookup.map(async ({ question }) => {
+              const answerId = communityAnswerByQuestion.get(String(question.id));
+              try {
+                if (answerId == null) return false;
+                knownAnswerCount++;
+                return await highlightAnswerWhenReady(question, answerId);
+              } finally {
+                advanceProgress();
+              }
+            })
+          );
+          highlightedAnswerCount = highlightResults.filter(Boolean).length;
 
           wrapper?.remove();
+
+          if (knownAnswerCount > 0 && highlightedAnswerCount === 0) {
+            showQuickToast(
+              `FIAP Tools ${chrome.runtime.getManifest().version}: ` +
+                `${knownAnswerCount} resposta(s) encontrada(s), mas a interface ` +
+                "do fast-test não foi localizada. Abra o console para os detalhes.",
+              9000
+            );
+          }
 
           const setFunctionOnFinishButton = (dom_target) => {
             if (!dom_target) {
@@ -665,7 +1077,11 @@ if (location.search.includes("id=") && location.search.includes("sesskey=")) {
             }
 
             const finishButton = dom_target.querySelector(
-              "button.style_finishButton__tGVPI"
+              [
+                'button[class*="finish-button"]',
+                'button[class*="finishButton"]',
+                "button.on-button-finish-fast-test",
+              ].join(", ")
             );
 
             if (
